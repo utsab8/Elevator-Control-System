@@ -7,8 +7,15 @@ namespace ElevatorControl
 {
     public partial class LogForm : Form
     {
-        private IReadOnlyList<string> logEntries;
+        private IReadOnlyList<string>? logEntries;
         private DatabaseManager dbManager;
+
+        public LogForm()
+        {
+            this.dbManager = DatabaseManager.Instance;
+            InitializeComponent();
+            LoadLogs();
+        }
 
         public LogForm(IReadOnlyList<string> logs)
         {
@@ -16,6 +23,22 @@ namespace ElevatorControl
             this.dbManager = DatabaseManager.Instance;
             InitializeComponent();
             LoadLogs();
+        }
+
+        public void AddLogEntry(string logMessage)
+        {
+            if (txtLog != null)
+            {
+                if (txtLog.InvokeRequired)
+                {
+                    txtLog.Invoke(new Action(() => AddLogEntry(logMessage)));
+                    return;
+                }
+                
+                txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {logMessage}{Environment.NewLine}");
+                txtLog.SelectionStart = txtLog.Text.Length;
+                txtLog.ScrollToCaret();
+            }
         }
 
         private void LoadLogs()

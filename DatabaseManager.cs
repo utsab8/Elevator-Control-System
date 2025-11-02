@@ -150,6 +150,12 @@ namespace ElevatorControl
             }
         }
 
+        // Overload for simple logging
+        public void AddLog(string message)
+        {
+            AddLog(message, 0, "INFO");
+        }
+
         public void AddLog(string message, int floor, string state)
         {
             // Queue the log entry for async processing

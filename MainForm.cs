@@ -1,438 +1,669 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using System.ComponentModel;
+using System.Threading.Tasks;
 
 namespace ElevatorControl
 {
     public partial class MainForm : Form
     {
-        private Elevator elevator;
-        private System.Windows.Forms.Timer animationTimer;
-        private System.Windows.Forms.Timer movementTimer;
-        private System.Windows.Forms.Timer doorTimer;
-        private int targetY;
+        private readonly DatabaseManager dbManager;
+        private readonly BackgroundWorker dbWorker;
+        private readonly System.Windows.Forms.Timer movementTimer;
+        private readonly System.Windows.Forms.Timer doorTimer;
+        private readonly ElevatorContext elevatorContext;
+
+        // Animation variables
         private int currentY;
-        private const int FLOOR_0_Y = 125; // Bottom position (Floor 0) - Ground
-        private const int FLOOR_1_Y = 5;    // Top position (Floor 1) - First Floor
+        private int targetY;
+        private const int FLOOR_0_Y = 250; // Bottom position (aligned with Floor 0 doors)
+        private const int FLOOR_1_Y = 10;  // Top position (aligned with Floor 1 doors)
         private bool doorsOpen = false;
         private int doorAnimationStep = 0;
-        private bool waitingToMove = false; // Flag to start movement after doors close
-        private int pendingTargetFloor = 0; // Store target floor for movement
+        private int currentFloor = 0;
+        private bool isMoving = false;
+
+        // Door animation constants
+        private const int DOOR_CLOSED_WIDTH = 125;
+        private const int DOOR_STEP = 6;
+
+        // Delegates
+        public delegate void FloorChangedDelegate(int floor);
+        public delegate void DoorStateDelegate(bool isOpen);
+        public event FloorChangedDelegate OnFloorChanged;
+        public event DoorStateDelegate OnDoorStateChanged;
 
         public MainForm()
         {
-            InitializeComponentSimple();
-            elevator = new Elevator();
-            
-            // Subscribe to elevator events
-            elevator.ElevatorStateChanged += Elevator_StateChanged;
-            elevator.LogEntryAdded += Elevator_LogEntryAdded;
+            InitializeComponent();
 
-            // Initialize animation timer for button lights
-            animationTimer = new System.Windows.Forms.Timer();
-            animationTimer.Interval = 2000;
-            animationTimer.Tick += AnimationTimer_Tick;
+            dbManager = DatabaseManager.Instance;
 
-            // Initialize movement timer for smooth elevator animation
+            dbWorker = new BackgroundWorker();
+            dbWorker.DoWork += DbWorker_DoWork!;
+            dbWorker.RunWorkerCompleted += DbWorker_RunWorkerCompleted!;
+
+            elevatorContext = new ElevatorContext(1, 2);
+            elevatorContext.StateChanged += ElevatorContext_StateChanged!;
+
             movementTimer = new System.Windows.Forms.Timer();
-            movementTimer.Interval = 20; // Smooth, realistic animation
-            movementTimer.Tick += MovementTimer_Tick;
+            movementTimer.Interval = 20;
+            movementTimer.Tick += MovementTimer_Tick!;
 
-            // Initialize door animation timer - SLOW AND GRADUAL
             doorTimer = new System.Windows.Forms.Timer();
-            doorTimer.Interval = 15; // Small pixel changes every 15ms
-            doorTimer.Tick += DoorTimer_Tick;
+            doorTimer.Interval = 15;
+            doorTimer.Tick += DoorTimer_Tick!;
 
-            // Set initial position (Floor 0)
+            OnFloorChanged += UpdateFloorDisplays;
+            OnDoorStateChanged += UpdateDoorStatus;
+
             currentY = FLOOR_0_Y;
             targetY = FLOOR_0_Y;
             pnlElevatorCar.Top = FLOOR_0_Y;
 
-            // Initial display update
-            UpdateDisplay();
-            UpdateStatusLabel();
+            // Initialize: ALL doors CLOSED at startup
+            InitializeDoorPositions();
+
+            LogOperation("System initialized at Floor 0");
         }
 
-        private void Elevator_StateChanged(object? sender, ElevatorEventArgs e)
+        private void InitializeDoorPositions()
+        {
+            // ALL FLOOR DOORS START CLOSED
+            // Floor 0 doors
+            pnlFloorDoorLeft_Floor0.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorLeft_Floor0.Left = 30;
+            pnlFloorDoorRight_Floor0.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorRight_Floor0.Left = 155;
+
+            // Floor 1 doors
+            pnlFloorDoorLeft_Floor1.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorLeft_Floor1.Left = 30;
+            pnlFloorDoorRight_Floor1.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorRight_Floor1.Left = 155;
+
+            doorAnimationStep = 0;
+            doorsOpen = false;
+        }
+
+        #region Event Handlers
+
+        private void BtnRequestFloor0_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (isMoving)
+                {
+                    MessageBox.Show("Elevator is currently moving. Please wait.", "Info",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                LogOperation("Request button pressed for Floor 0");
+                MoveToFloor(0);
+            }
+            catch (Exception ex)
+            {
+                HandleException("Request Floor 0", ex);
+            }
+        }
+
+        private void BtnRequestFloor1_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (isMoving)
+                {
+                    MessageBox.Show("Elevator is currently moving. Please wait.", "Info",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                LogOperation("Request button pressed for Floor 1");
+                MoveToFloor(1);
+            }
+            catch (Exception ex)
+            {
+                HandleException("Request Floor 1", ex);
+            }
+        }
+
+        private void BtnControlFloor0_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (isMoving)
+                {
+                    MessageBox.Show("Elevator is currently moving. Please wait.", "Info",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                LogOperation("Control panel button pressed for Floor 0");
+                MoveToFloor(0);
+            }
+            catch (Exception ex)
+            {
+                HandleException("Control Floor 0", ex);
+            }
+        }
+
+        private void BtnControlFloor1_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (isMoving)
+                {
+                    MessageBox.Show("Elevator is currently moving. Please wait.", "Info",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                LogOperation("Control panel button pressed for Floor 1");
+                MoveToFloor(1);
+            }
+            catch (Exception ex)
+            {
+                HandleException("Control Floor 1", ex);
+            }
+        }
+
+        private void BtnOpenDoor_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (isMoving)
+                {
+                    MessageBox.Show("Cannot open doors while elevator is moving.", "Info",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                LogOperation("Door open button pressed");
+                OpenDoors();
+            }
+            catch (Exception ex)
+            {
+                HandleException("Open Door", ex);
+            }
+        }
+
+        private void BtnCloseDoor_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (isMoving)
+                {
+                    MessageBox.Show("Elevator is currently moving.", "Info",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                LogOperation("Door close button pressed");
+                CloseDoors();
+            }
+            catch (Exception ex)
+            {
+                HandleException("Close Door", ex);
+            }
+        }
+
+        #endregion
+
+        #region Movement Logic
+
+        private void MoveToFloor(int targetFloor)
+        {
+            try
+            {
+                if (targetFloor == currentFloor)
+                {
+                    LogOperation($"Already at Floor {targetFloor}");
+                    OpenDoors();
+                    return;
+                }
+
+                elevatorContext.RequestFloor(targetFloor + 1);
+
+                if (doorsOpen)
+                {
+                    CloseDoors();
+                    Task.Delay(1500).ContinueWith(_ =>
+                    {
+                        if (InvokeRequired)
+                            Invoke(new Action(() => StartMovement(targetFloor)));
+                        else
+                            StartMovement(targetFloor);
+                    });
+                }
+                else
+                {
+                    StartMovement(targetFloor);
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleException("Move To Floor", ex);
+            }
+        }
+
+        private void StartMovement(int targetFloor)
+        {
+            try
+            {
+                isMoving = true;
+                targetY = targetFloor == 0 ? FLOOR_0_Y : FLOOR_1_Y;
+
+                string direction = targetFloor > currentFloor ? "up" : "down";
+                LogOperation($"Elevator moving {direction} to Floor {targetFloor}");
+
+                movementTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                HandleException("Start Movement", ex);
+            }
+        }
+
+        #endregion
+
+        #region Animation Timers
+
+        private void MovementTimer_Tick(object? sender, EventArgs e)
+        {
+            try
+            {
+                const int speed = 3;
+
+                if (currentY < targetY)
+                {
+                    currentY = Math.Min(currentY + speed, targetY);
+                    pnlElevatorCar.Top = currentY;
+                }
+                else if (currentY > targetY)
+                {
+                    currentY = Math.Max(currentY - speed, targetY);
+                    pnlElevatorCar.Top = currentY;
+                }
+                else
+                {
+                    movementTimer.Stop();
+                    isMoving = false;
+
+                    currentFloor = (currentY == FLOOR_0_Y) ? 0 : 1;
+                    OnFloorChanged?.Invoke(currentFloor);
+
+                    LogOperation($"Elevator arrived at Floor {currentFloor}");
+                    PlayArrivalSound();
+                    OpenDoors();
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleException("Movement Timer", ex);
+            }
+        }
+
+        private void DoorTimer_Tick(object? sender, EventArgs e)
+        {
+            try
+            {
+                if (doorsOpen)
+                {
+                    // OPENING: Realistic sliding doors - both doors slide outward
+                    if (doorAnimationStep < DOOR_CLOSED_WIDTH)
+                    {
+                        if (currentFloor == 0)
+                        {
+                            // Open Floor 0 doors - LEFT door slides LEFT, RIGHT door slides RIGHT
+                            // Left door: moves left and stays full width
+                            pnlFloorDoorLeft_Floor0.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorLeft_Floor0.Left = 30 - doorAnimationStep;
+
+                            // Right door: moves right and stays full width
+                            pnlFloorDoorRight_Floor0.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorRight_Floor0.Left = 155 + doorAnimationStep;
+
+                            // Keep Floor 1 doors CLOSED
+                            pnlFloorDoorLeft_Floor1.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorLeft_Floor1.Left = 30;
+                            pnlFloorDoorRight_Floor1.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorRight_Floor1.Left = 155;
+                        }
+                        else if (currentFloor == 1)
+                        {
+                            // Open Floor 1 doors - LEFT door slides LEFT, RIGHT door slides RIGHT
+                            pnlFloorDoorLeft_Floor1.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorLeft_Floor1.Left = 30 - doorAnimationStep;
+
+                            pnlFloorDoorRight_Floor1.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorRight_Floor1.Left = 155 + doorAnimationStep;
+
+                            // Keep Floor 0 doors CLOSED
+                            pnlFloorDoorLeft_Floor0.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorLeft_Floor0.Left = 30;
+                            pnlFloorDoorRight_Floor0.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorRight_Floor0.Left = 155;
+                        }
+
+                        doorAnimationStep += DOOR_STEP;
+                    }
+                    else
+                    {
+                        doorTimer.Stop();
+                        OnDoorStateChanged?.Invoke(true);
+
+                        // Auto-close after 3 seconds (more realistic timing)
+                        Task.Delay(3000).ContinueWith(_ =>
+                        {
+                            if (InvokeRequired)
+                                Invoke(new Action(CloseDoors));
+                            else
+                                CloseDoors();
+                        });
+                    }
+                }
+                else
+                {
+                    // CLOSING: Realistic sliding doors - both doors slide inward
+                    if (doorAnimationStep > 0)
+                    {
+                        doorAnimationStep -= DOOR_STEP;
+
+                        if (currentFloor == 0)
+                        {
+                            // Close Floor 0 doors - doors slide back to center
+                            pnlFloorDoorLeft_Floor0.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorLeft_Floor0.Left = 30 - doorAnimationStep;
+
+                            pnlFloorDoorRight_Floor0.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorRight_Floor0.Left = 155 + doorAnimationStep;
+                        }
+                        else if (currentFloor == 1)
+                        {
+                            // Close Floor 1 doors - doors slide back to center
+                            pnlFloorDoorLeft_Floor1.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorLeft_Floor1.Left = 30 - doorAnimationStep;
+
+                            pnlFloorDoorRight_Floor1.Width = DOOR_CLOSED_WIDTH;
+                            pnlFloorDoorRight_Floor1.Left = 155 + doorAnimationStep;
+                        }
+                    }
+                    else
+                    {
+                        doorTimer.Stop();
+                        doorAnimationStep = 0;
+
+                        // Ensure all doors fully closed at exact positions
+                        ResetAllDoorsToClosedPosition();
+
+                        OnDoorStateChanged?.Invoke(false);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleException("Door Timer", ex);
+            }
+        }
+
+        private void ResetAllDoorsToClosedPosition()
+        {
+            // Floor 0 doors
+            pnlFloorDoorLeft_Floor0.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorLeft_Floor0.Left = 30;
+            pnlFloorDoorRight_Floor0.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorRight_Floor0.Left = 155;
+
+            // Floor 1 doors
+            pnlFloorDoorLeft_Floor1.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorLeft_Floor1.Left = 30;
+            pnlFloorDoorRight_Floor1.Width = DOOR_CLOSED_WIDTH;
+            pnlFloorDoorRight_Floor1.Left = 155;
+        }
+
+        private void OpenDoors()
+        {
+            try
+            {
+                if (!doorsOpen)
+                {
+                    doorsOpen = true;
+                    doorAnimationStep = 0;
+                    doorTimer.Start();
+                    PlayDoorSound();
+                    LogOperation($"Doors opening at Floor {currentFloor}");
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleException("Open Doors", ex);
+            }
+        }
+
+        private void CloseDoors()
+        {
+            try
+            {
+                if (doorsOpen)
+                {
+                    doorsOpen = false;
+                    doorTimer.Start();
+                    PlayDoorSound();
+                    LogOperation($"Doors closing at Floor {currentFloor}");
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleException("Close Doors", ex);
+            }
+        }
+
+        #endregion
+
+        #region Display Updates
+
+        private void UpdateFloorDisplays(int floor)
         {
             try
             {
                 if (InvokeRequired)
                 {
-                    Invoke(new Action(() => Elevator_StateChanged(sender, e)));
+                    Invoke(new FloorChangedDelegate(UpdateFloorDisplays), floor);
                     return;
                 }
 
-                UpdateDisplay();
-                UpdateStatusLabel();
-                UpdateFloorIndicators();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Form is closing, ignore
-            }
-            catch (InvalidOperationException ex)
-            {
-                // Handle invoke errors gracefully
-                System.Diagnostics.Debug.WriteLine($"State update error: {ex.Message}");
+                lblControlDisplay.Text = floor.ToString();
+                lblCurrentFloor.Text = $"Current: Floor {floor}";
+
+                if (floor == 0)
+                {
+                    lblFloor0Status.Text = "Elevator Here";
+                    lblFloor0Status.ForeColor = Color.FromArgb(76, 175, 80);
+                    lblFloor0Status.BackColor = Color.FromArgb(200, 255, 200);
+
+                    lblFloor1Status.Text = "Elevator Away";
+                    lblFloor1Status.ForeColor = Color.Gray;
+                    lblFloor1Status.BackColor = Color.FromArgb(240, 240, 240);
+                }
+                else
+                {
+                    lblFloor1Status.Text = "Elevator Here";
+                    lblFloor1Status.ForeColor = Color.FromArgb(76, 175, 80);
+                    lblFloor1Status.BackColor = Color.FromArgb(200, 255, 200);
+
+                    lblFloor0Status.Text = "Elevator Away";
+                    lblFloor0Status.ForeColor = Color.Gray;
+                    lblFloor0Status.BackColor = Color.FromArgb(240, 240, 240);
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error updating display: {ex.Message}", "Display Error", 
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                HandleException("Update Floor Displays", ex);
             }
         }
 
-        private void Elevator_LogEntryAdded(object? sender, string logEntry)
+        private void UpdateDoorStatus(bool isOpen)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => Elevator_LogEntryAdded(sender, logEntry)));
-                return;
-            }
+            // Additional updates if needed
         }
 
-        private void UpdateDisplay()
-        {
-            // Update control panel display
-            int displayFloor = elevator.CurrentFloor - 1;
-            lblControlPanelDisplay.Text = displayFloor.ToString();
-            
-            // Update button colors
-            btnFloor1.BackColor = elevator.CurrentFloor == 2 ? Color.FromArgb(46, 204, 113) : Color.FromArgb(52, 152, 219);
-            btnFloor0.BackColor = elevator.CurrentFloor == 1 ? Color.FromArgb(46, 204, 113) : Color.FromArgb(52, 152, 219);
-        }
+        #endregion
 
-        private void UpdateStatusLabel()
-        {
-            int displayFloor = elevator.CurrentFloor - 1;
-            string status = elevator.State switch
-            {
-                ElevatorState.Idle => $"Idle at Floor {displayFloor}",
-                ElevatorState.MovingUp => "Moving Up...",
-                ElevatorState.MovingDown => "Moving Down...",
-                ElevatorState.DoorsOpening => "Doors Opening",
-                ElevatorState.DoorsOpen => $"Arrived at Floor {displayFloor}",
-                ElevatorState.DoorsClosing => "Doors Closing",
-                _ => "Operating"
-            };
-            lblElevatorStatus.Text = $"Status: {status}";
-        }
+        #region Database and State Management
 
-        private void UpdateFloorIndicators()
+        private void LogOperation(string operation)
         {
-            if (elevator.CurrentFloor == 1) // Ground Floor (0)
+            try
             {
-                // Floor 0: Elevator is here
-                pnlFloor0Indicator.BackColor = Color.FromArgb(100, 200, 100); // Green
-                lblFloor0Indicator.Text = "ELEVATOR\nHERE";
-                lblFloor0Indicator.ForeColor = Color.FromArgb(46, 204, 113); // Green text
-                
-                // Floor 1: Elevator away
-                pnlFloor1Indicator.BackColor = Color.FromArgb(150, 150, 150); // Gray
-                lblFloor1Indicator.Text = "";
-                lblFloor1Indicator.ForeColor = Color.FromArgb(100, 100, 100); // Gray text
-            }
-            else // Floor 1
-            {
-                // Floor 1: Elevator is here
-                pnlFloor1Indicator.BackColor = Color.FromArgb(100, 200, 100); // Green
-                lblFloor1Indicator.Text = "ELEVATOR\nHERE";
-                lblFloor1Indicator.ForeColor = Color.FromArgb(46, 204, 113); // Green text
-                
-                // Floor 0: Elevator away
-                pnlFloor0Indicator.BackColor = Color.FromArgb(150, 150, 150); // Gray
-                lblFloor0Indicator.Text = "";
-                lblFloor0Indicator.ForeColor = Color.FromArgb(100, 100, 100); // Gray text
-            }
-        }
-
-        private void StartElevatorMovement()
-        {
-            // Update elevator state and start movement
-            waitingToMove = false;
-            elevator.RequestFloor(pendingTargetFloor);
-            
-            // Set target position
-            targetY = pendingTargetFloor == 2 ? FLOOR_1_Y : FLOOR_0_Y;
-            
-            // Update status
-            if (pendingTargetFloor > elevator.CurrentFloor)
-            {
-                lblElevatorStatus.Text = "Status: Moving Up...";
-            }
-            else
-            {
-                lblElevatorStatus.Text = "Status: Moving Down...";
-            }
-            
-            // Start movement timer
-            movementTimer.Start();
-        }
-
-        private void MovementTimer_Tick(object? sender, EventArgs e)
-        {
-            // Smooth, realistic movement: 2 pixels every 20ms
-            // Distance: 120 pixels, Speed: 2px/20ms = ~3 seconds total
-            int speed = 2;
-            
-            if (currentY < targetY)
-            {
-                currentY += speed;
-                if (currentY >= targetY)
+                if (!dbWorker.IsBusy)
                 {
-                    currentY = targetY;
-                    movementTimer.Stop();
-                    // Movement complete - NOW open doors
-                    OpenDoors();
+                    dbWorker.RunWorkerAsync(operation);
                 }
             }
-            else if (currentY > targetY)
+            catch (Exception ex)
             {
-                currentY -= speed;
-                if (currentY <= targetY)
-                {
-                    currentY = targetY;
-                    movementTimer.Stop();
-                    // Movement complete - NOW open doors
-                    OpenDoors();
-                }
+                System.Diagnostics.Debug.WriteLine($"Logging error: {ex.Message}");
             }
-
-            pnlElevatorCar.Top = currentY;
         }
 
-        private void OpenDoors()
+        private void DbWorker_DoWork(object? sender, DoWorkEventArgs e)
         {
-            if (doorsOpen) return;
-            doorAnimationStep = 0;
-            doorsOpen = true;
-            lblElevatorStatus.Text = "Status: Doors Opening";
-            doorTimer.Start();
+            try
+            {
+                string? operation = e.Argument as string;
+                if (!string.IsNullOrEmpty(operation))
+                {
+                    dbManager.AddLog(operation);
+                }
+            }
+            catch (Exception ex)
+            {
+                e.Result = ex;
+            }
         }
 
-        private void CloseDoors()
+        private void DbWorker_RunWorkerCompleted(object? sender, RunWorkerCompletedEventArgs e)
         {
-            if (!doorsOpen)
+            if (e.Result is Exception ex)
             {
-                // Doors already closed, check if we should start moving
-                if (waitingToMove)
-                {
-                    StartElevatorMovement();
-                }
-                return;
+                HandleException("Database Operation", ex);
             }
-            doorAnimationStep = 0;
-            doorsOpen = false;
-            lblElevatorStatus.Text = "Status: Doors Closing";
-            doorTimer.Start();
         }
 
-        private void DoorTimer_Tick(object? sender, EventArgs e)
+        private void BtnShowLog_Click(object sender, EventArgs e)
         {
-            // SLOW, GRADUAL door movement: 2 pixels every 15ms
-            const int maxStep = 35; // Maximum door opening width
-            const int doorSpeed = 2; // Slow, realistic speed
-            
-            if (doorsOpen)
+            try
             {
-                // Opening animation - doors slide apart SLOWLY
-                doorAnimationStep += doorSpeed;
-                if (doorAnimationStep >= maxStep)
-                {
-                    doorAnimationStep = maxStep;
-                    doorTimer.Stop();
-                    lblElevatorStatus.Text = $"Status: Arrived at Floor {elevator.CurrentFloor - 1}";
-                }
-                pnlDoorLeft.Left = -doorAnimationStep;
-                pnlDoorRight.Left = 40 + doorAnimationStep;
+                LogOperation("Log window opened");
+                LogForm logForm = new LogForm();
+                logForm.Show();
             }
-            else
+            catch (Exception ex)
             {
-                // Closing animation - doors slide together SLOWLY
-                int currentLeft = pnlDoorLeft.Left;
-                int currentRight = pnlDoorRight.Left;
-                
-                if (currentLeft < 0)
+                HandleException("Show Log", ex);
+            }
+        }
+
+        private void ElevatorContext_StateChanged(object? sender, StateChangedEventArgs e)
+        {
+            try
+            {
+                if (InvokeRequired)
                 {
-                    pnlDoorLeft.Left = Math.Min(0, currentLeft + doorSpeed);
+                    Invoke(new Action(() => ElevatorContext_StateChanged(sender, e)));
+                    return;
                 }
-                if (currentRight > 40)
+
+                LogOperation($"State changed to: {e.StateName}");
+            }
+            catch (Exception ex)
+            {
+                HandleException("State Changed", ex);
+            }
+        }
+
+        #endregion
+
+        #region Error Handling and Sound
+
+        private void HandleException(string operation, Exception ex)
+        {
+            try
+            {
+                string errorMessage = $"Error in {operation}: {ex.Message}";
+                System.Diagnostics.Debug.WriteLine(errorMessage);
+                dbManager.AddLog($"ERROR - {errorMessage}");
+
+                MessageBox.Show(
+                    $"An error occurred during {operation}.\n\nDetails: {ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            catch
+            {
+                MessageBox.Show("A critical error occurred.", "Critical Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void PlayArrivalSound()
+        {
+            try
+            {
+                Task.Run(() =>
                 {
-                    pnlDoorRight.Left = Math.Max(40, currentRight - doorSpeed);
-                }
-                
-                if (pnlDoorLeft.Left >= 0 && pnlDoorRight.Left <= 40)
-                {
-                    // Doors fully closed
-                    doorTimer.Stop();
-                    lblElevatorStatus.Text = "Status: Doors Closed";
-                    
-                    // CRITICAL: Start elevator movement ONLY after doors are fully closed
-                    if (waitingToMove)
+                    try
                     {
-                        StartElevatorMovement();
+                        Console.Beep(800, 200);
+                        System.Threading.Thread.Sleep(50);
+                        Console.Beep(600, 300);
                     }
-                }
+                    catch { }
+                });
             }
+            catch { }
         }
 
-        private void btnRequestFloor1_Click(object sender, EventArgs e)
+        private void PlayDoorSound()
         {
             try
             {
-                // Validate elevator is not in error state
-                if (elevator == null)
+                Task.Run(() =>
                 {
-                    MessageBox.Show("Elevator system not initialized!", "Error", 
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                // Request button pressed - Move elevator to Floor 1
-                btnRequestFloor1.BackColor = Color.FromArgb(192, 57, 43);
-                animationTimer.Stop();
-                animationTimer.Start();
-                
-                // Check if already at target floor
-                if (elevator.CurrentFloor == 2)
-                {
-                    elevator.RequestFloor(2);
-                    return;
-                }
-                
-                // SEQUENCE: Close doors → Move → Open doors
-                pendingTargetFloor = 2;
-                waitingToMove = true;
-                CloseDoors();
+                    try
+                    {
+                        Console.Beep(500, 100);
+                    }
+                    catch { }
+                });
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error requesting floor: {ex.Message}", "Request Error", 
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            catch { }
         }
 
-        private void btnRequestFloor2_Click(object sender, EventArgs e)
+        #endregion
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
         {
             try
             {
-                if (elevator == null) return;
+                base.OnFormClosing(e);
+                movementTimer?.Stop();
+                doorTimer?.Stop();
+                LogOperation("System shutdown");
 
-                // Request button pressed - Move elevator to Floor 0 (Ground)
-                btnRequestFloor2.BackColor = Color.FromArgb(192, 57, 43);
-                animationTimer.Stop();
-                animationTimer.Start();
-                
-                // Check if already at target floor
-                if (elevator.CurrentFloor == 1)
+                if (dbWorker.IsBusy)
                 {
-                    elevator.RequestFloor(1);
-                    return;
+                    System.Threading.Thread.Sleep(500);
                 }
-                
-                // SEQUENCE: Close doors → Move → Open doors
-                pendingTargetFloor = 1;
-                waitingToMove = true;
-                CloseDoors();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error requesting floor: {ex.Message}", "Request Error", 
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                System.Diagnostics.Debug.WriteLine($"Shutdown error: {ex.Message}");
             }
-        }
-
-        private void btnFloor1_Click(object sender, EventArgs e)
-        {
-            // Control panel button pressed - Move to Floor 1
-            btnFloor1.BackColor = Color.FromArgb(46, 204, 113);
-            animationTimer.Stop();
-            animationTimer.Start();
-            
-            // Check if already at target floor
-            if (elevator.CurrentFloor == 2)
-            {
-                elevator.RequestFloor(2);
-                return;
-            }
-            
-            // SEQUENCE: Close doors → Move → Open doors
-            pendingTargetFloor = 2;
-            waitingToMove = true;
-            CloseDoors();
-        }
-
-        private void btnFloor0_Click(object sender, EventArgs e)
-        {
-            // Control panel button pressed - Move to Floor 0 (Ground)
-            btnFloor0.BackColor = Color.FromArgb(46, 204, 113);
-            animationTimer.Stop();
-            animationTimer.Start();
-            
-            // Check if already at target floor
-            if (elevator.CurrentFloor == 1)
-            {
-                elevator.RequestFloor(1);
-                return;
-            }
-            
-            // SEQUENCE: Close doors → Move → Open doors
-            pendingTargetFloor = 1;
-            waitingToMove = true;
-            CloseDoors();
-        }
-
-        private void btnShowLog_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                if (elevator == null)
-                {
-                    MessageBox.Show("Elevator system not initialized!", "Error", 
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                LogForm logForm = new LogForm(elevator.OperationLog);
-                logForm.ShowDialog();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error opening log: {ex.Message}", "Log Error", 
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnOpenDoor_Click(object sender, EventArgs e)
-        {
-            // Don't allow manual door operation while moving
-            if (movementTimer.Enabled)
-            {
-                MessageBox.Show("Cannot open doors while elevator is moving!", "Operation Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            OpenDoors();
-        }
-
-        private void btnCloseDoor_Click(object sender, EventArgs e)
-        {
-            // Don't allow manual door operation while moving
-            if (movementTimer.Enabled)
-            {
-                MessageBox.Show("Cannot close doors while elevator is moving!", "Operation Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            CloseDoors();
-        }
-
-        private void AnimationTimer_Tick(object? sender, EventArgs e)
-        {
-            animationTimer.Stop();
-            // Reset request button colors to white
-            btnRequestFloor1.BackColor = Color.White;
-            btnRequestFloor2.BackColor = Color.White;
-            UpdateDisplay();
         }
     }
 }
